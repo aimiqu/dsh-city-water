@@ -1,0 +1,42 @@
+{
+  "name": "dsh-city-water",
+  "version": "0.1.0",
+  "description": "城市水智管 · 水资源管理 Agent：DSH 工作台插件（宿主半：水务数据 API + 面板内流式对话通道 + 只读演示工具 + city-water 技能同步 + 系统提示节；浏览器半：侧栏入口 + 会话区工作台面板）",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "skills",
+    "workbench",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "water",
+    "city-water",
+    "水智管",
+    "水资源"
+  ],
+  "license": "MIT"
+}

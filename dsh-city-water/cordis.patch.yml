@@ -1,0 +1,9 @@
+# dsh-city-water bundle 补丁层：向 web profile 的组合清单插入本插件行。
+# 宿主半（exports "."）在 dsh 进程内运行（水务数据 API + 只读工具 + 系统提示节），
+# 浏览器半（exports "./client"，由宿主 /plugins/dsh-city-water/client.js 提供）
+# 注入侧边栏「城市水智管」入口；工作台页面经同源镜像
+# /api/dsh-city-water/workbench/ 提供，对话统一转交 DSH 原生会话。
+- insert:
+    - id: dsh-city-water
+      name: dsh-city-water
+      config: {}
