@@ -46,15 +46,47 @@ const ANNOUNCEMENT = `【城市水智管（dsh-city-water 插件）】
 7. 本插件提供「city-water」技能（水资源管理：研判 SOP、指标阈值、调度框架、报告模板与安全红线）：原生会话可用 /city-water 显式调用，或由模型按需挂载；用户提到「水资源技能 / 水务 SOP」时即指该技能。
 用户提到「水智管 / 工作台 / 看板 / 调度 / 预警 / 河湖 / 报告」时即指本插件。`;
 
-/** Loopback 护栏：本插件未来承载真实水务数据，仅放行本机浏览器请求。 */
-function isLoopbackRequest(req) {
-  const address = req.socket?.remoteAddress;
-  if (address !== '127.0.0.1' && address !== '::1' && address !== '::ffff:127.0.0.1') return false;
+/** 回环主机名集合（与 harness 自身 /api 信任栅栏一致）。 */
+const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '[::1]', '::1']);
+
+/** 归一化一条可信 authority（如 'dsh.yuxinqu.com' 或 'dsh.yuxinqu.com:3080'）为 hostname。 */
+function trustedHostname(entry) {
+  try { return new URL(`http://${entry}`).hostname; } catch { return null; }
+}
+
+/**
+ * 从 harness 的 cmdlineArgs（根级服务，所有插件可见）解析 --trusted-host：
+ * `dsh web --trusted-host dsh.yuxinqu.com` → ['dsh.yuxinqu.com']。
+ * 兼容变长取值与可重复选项。
+ */
+function trustedHostsFromCmdline(cmdline) {
+  const list = Array.isArray(cmdline) ? cmdline : [];
+  const hosts = [];
+  for (let i = 0; i < list.length; i += 1) {
+    if (list[i] === '--trusted-host') {
+      for (let j = i + 1; j < list.length; j += 1) {
+        if (typeof list[j] !== 'string' || list[j].startsWith('-')) break;
+        hosts.push(list[j]);
+      }
+    }
+  }
+  return hosts;
+}
+
+/**
+ * 准入护栏（与 harness 的 api-request-trust 对齐：以 Host 为准，不强依赖 socket 来源）：
+ * Host 为回环主机名，或命中部署声明的可信 authority（--trusted-host / webRuntime.trustedHosts），
+ * 且非 cross-site、Origin 与 Host 同源（存在时）才放行。作为 /api 信任栅栏之后的一道护栏。
+ */
+function isLoopbackRequest(req, trusted = []) {
   const host = req.headers.host;
   if (typeof host !== 'string') return false;
   let hostUrl;
   try { hostUrl = new URL(`http://${host}`); } catch { return false; }
-  if (!['127.0.0.1', 'localhost', '[::1]'].includes(hostUrl.hostname)) return false;
+  const hostname = hostUrl.hostname;
+  const loopback = LOOPBACK_HOSTNAMES.has(hostname);
+  const trustedMatch = !loopback && trusted.some((entry) => trustedHostname(entry) === hostname);
+  if (!loopback && !trustedMatch) return false;
   if (req.headers['sec-fetch-site'] === 'cross-site') return false;
   const origin = req.headers.origin;
   if (origin === undefined) return true;
@@ -110,6 +142,21 @@ export function apply(ctx, config = {}) {
     try { ctx.logger?.info(msg); } catch { console.log(`[dsh-city-water] ${msg}`); }
   };
 
+  // 部署可信主机：与 harness 自身 /api 信任栅栏对齐。
+  // 优先从 cmdlineArgs（根级服务，任何插件可读）解析 --trusted-host；webRuntime 为
+  // 特定行提供的服务，兄弟插件未必读得到，故仅作补充。可再经 config.trustedHosts 显式覆盖。
+  let cmdTrusted = [];
+  let webRuntimeTrusted = [];
+  if (typeof ctx.get === 'function') {
+    try { cmdTrusted = trustedHostsFromCmdline(ctx.get('cmdlineArgs')?.get?.()); } catch { /* ignore */ }
+    try { webRuntimeTrusted = [...(ctx.get('webRuntime')?.trustedHosts ?? [])]; } catch { /* ignore */ }
+  }
+  const trustedHosts = [
+    ...(Array.isArray(config.trustedHosts) ? config.trustedHosts : []),
+    ...cmdTrusted,
+    ...webRuntimeTrusted,
+  ];
+
   ctx.effect(async () => {
     const disposers = [];
     const announce = config.announceToAgent !== false;
@@ -141,7 +188,7 @@ export function apply(ctx, config = {}) {
       kind: 'exact',
       path: `${BASE}/workbench`,
       handler: (req, res) => {
-        if (!isLoopbackRequest(req)) return writeText(res, 403, 'loopback only');
+        if (!isLoopbackRequest(req, trustedHosts)) return writeText(res, 403, 'loopback only');
         res.writeHead(302, { Location: `${BASE}/workbench/` });
         res.end();
       },
@@ -150,7 +197,7 @@ export function apply(ctx, config = {}) {
       kind: 'prefix',
       path: `${BASE}/workbench`,
       handler: (req, res) => {
-        if (!isLoopbackRequest(req)) return writeText(res, 403, 'loopback only');
+        if (!isLoopbackRequest(req, trustedHosts)) return writeText(res, 403, 'loopback only');
         if (req.method !== 'GET' && req.method !== 'HEAD') return writeText(res, 405, 'method not allowed');
         const url = new URL(req.url ?? '/', 'http://x');
         const rel = decodeURIComponent(url.pathname.slice(`${BASE}/workbench`.length));
@@ -183,7 +230,7 @@ export function apply(ctx, config = {}) {
       kind: 'exact',
       path: `${BASE}/api/info`,
       handler: (req, res) => {
-        if (!isLoopbackRequest(req)) return writeJson(res, 403, { ok: false, error: 'loopback only' });
+        if (!isLoopbackRequest(req, trustedHosts)) return writeJson(res, 403, { ok: false, error: 'loopback only' });
         writeJson(res, 200, {
           ok: true, plugin: 'dsh-city-water', version: '0.1.0', cities: CITIES,
           source: 'demo', note: '演示数据模式；接入真实数据源后 source 变为 live',
@@ -194,7 +241,7 @@ export function apply(ctx, config = {}) {
       kind: 'exact',
       path: `${BASE}/api/overview`,
       handler: (req, res) => {
-        if (!isLoopbackRequest(req)) return writeJson(res, 403, { ok: false, error: 'loopback only' });
+        if (!isLoopbackRequest(req, trustedHosts)) return writeJson(res, 403, { ok: false, error: 'loopback only' });
         const { city } = queryOf(req);
         const data = buildWaterData(city);
         writeJson(res, 200, { ok: true, city, generatedAt: data.meta.generatedAt, source: 'demo', data });
@@ -204,7 +251,7 @@ export function apply(ctx, config = {}) {
       kind: 'prefix',
       path: `${BASE}/api/module`,
       handler: (req, res) => {
-        if (!isLoopbackRequest(req)) return writeJson(res, 403, { ok: false, error: 'loopback only' });
+        if (!isLoopbackRequest(req, trustedHosts)) return writeJson(res, 403, { ok: false, error: 'loopback only' });
         const { url, city } = queryOf(req);
         const mod = decodeURIComponent(url.pathname.slice(`${BASE}/api/module`.length).replace(/^\/+/, ''));
         const data = buildWaterData(city);
@@ -216,7 +263,7 @@ export function apply(ctx, config = {}) {
       kind: 'prefix',
       path: `${BASE}/api/system`,
       handler: (req, res) => {
-        if (!isLoopbackRequest(req)) return writeJson(res, 403, { ok: false, error: 'loopback only' });
+        if (!isLoopbackRequest(req, trustedHosts)) return writeJson(res, 403, { ok: false, error: 'loopback only' });
         const { url, city } = queryOf(req);
         const key = decodeURIComponent(url.pathname.slice(`${BASE}/api/system`.length).replace(/^\/+/, ''));
         if (!SYSTEM_NAMES.has(key)) return writeJson(res, 404, { ok: false, error: `unknown system section: ${key}` });
@@ -234,7 +281,7 @@ export function apply(ctx, config = {}) {
       kind: 'exact',
       path: `${BASE}/chat`,
       handler: async (req, res) => {
-        if (!isLoopbackRequest(req)) return writeJson(res, 403, { ok: false, error: 'loopback only' });
+        if (!isLoopbackRequest(req, trustedHosts)) return writeJson(res, 403, { ok: false, error: 'loopback only' });
         if (req.method !== 'POST') return writeText(res, 405, 'method not allowed');
         const chunks = [];
         let size = 0;

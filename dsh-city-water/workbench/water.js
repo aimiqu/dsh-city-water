@@ -267,7 +267,7 @@
     if (pill === null) return;
     if (state.hostOnline === true) {
       pill.className = 'host-pill';
-      pill.innerHTML = '<i></i><span>Agent 在线 · 宿主已连接</span>';
+      pill.innerHTML = '<i></i><span>Agent 在线</span>';
     } else if (state.hostOnline === false) {
       pill.className = 'host-pill offline';
       pill.innerHTML = '<i></i><span>宿主未连接 · 演示快照</span>';

@@ -53,8 +53,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .city-switch { padding: 0 13px; display: flex; gap: 9px; align-items: center; white-space: nowrap; }
 .city-switch span { color: var(--blue); font-size: 19px; }.city-switch b { margin-left: 10px; }
 .date { display: flex; align-items: center; gap: 8px; white-space: nowrap; font-size: 14px; }.date i { font-style: normal; color: #526a82; font-size: 17px; }
-.search-trigger { width: min(260px, 21vw); padding: 0 12px; display: flex; align-items: center; gap: 8px; color: #6f7e8d; text-align: left; }
-.search-trigger > span { font-size: 22px; color: #344a5e; }.search-trigger kbd { margin-left: auto; padding: 2px 5px; border: 1px solid #dce4ec; border-radius: 4px; color: #93a1ae; font-size: 10px; }
+.search-trigger { width: min(260px, 21vw); padding: 0 12px; display: flex; align-items: center; gap: 8px; color: #6f7e8d; text-align: left; min-width: 0; overflow: hidden; }
+.search-trigger > span { font-size: 22px; color: #344a5e; }
+.search-trigger .search-label { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; min-width: 0; }
+.search-trigger kbd { margin-left: auto; padding: 2px 5px; border: 1px solid #dce4ec; border-radius: 4px; color: #93a1ae; font-size: 10px; flex: none; }
 .notice-btn { width: 37px; height: 42px; border: 0; background: transparent; position: relative; font-size: 24px; }.notice-btn i { position: absolute; right: -2px; top: 1px; width: 17px; height: 17px; display: grid; place-items: center; color: #fff; background: #d73b2e; border-radius: 50%; border: 2px solid #fff; font: 700 9px Arial; }
 .avatar { width: 38px; height: 38px; border: 0; border-radius: 50%; background: linear-gradient(145deg, #0b527e, #052f53); color: #fff; font-weight: 800; box-shadow: inset 0 0 0 3px rgba(255,255,255,.12); }
 .page-area { padding-right: 58px; }
