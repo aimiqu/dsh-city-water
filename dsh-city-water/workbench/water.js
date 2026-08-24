@@ -323,6 +323,8 @@
     var quick = (d.agent.quickPrompts || []).map(function (item) {
       return '<button data-action="quick-prompt" data-text="' + esc(item) + '"' + (isBusy() ? ' disabled' : '') + '>' + esc(item) + '</button>';
     }).join('');
+    // 固定快捷提问：按钮标签与发送文案分离；走与上方快捷按钮相同的快速提问通道（宿主 /chat 真实接口）。
+    quick += '<button data-action="quick-prompt" data-text="请结合现有数据，分析城阳区当前供水风险，并说明判断依据和建议"' + (isBusy() ? ' disabled' : '') + '>分析城阳区供水风险</button>';
     return '<article class="panel agent-panel">'
       + '<div class="panel-title"><span class="round-logo">≈</span><strong>城市水资源管理 Agent</strong>'
       + '<span class="live-pill"><i></i>实时协同 · 水务 Agent</span>'
@@ -397,6 +399,11 @@
     });
   }
 
+  function syncQuickPrompts() {
+    var buttons = $$('.quick-prompts button');
+    for (var i = 0; i < buttons.length; i++) buttons[i].disabled = isBusy();
+  }
+
   function renderChatArea() {
     var stream = $('#chat-stream');
     if (stream === null) return;
@@ -404,6 +411,7 @@
     var live = $('#assistant-stream');
     if (live !== null && state.pending !== null) live.textContent = state.pending.text;
     stream.scrollTop = stream.scrollHeight;
+    syncQuickPrompts();
     bindComposer();
   }
 
