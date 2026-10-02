@@ -16,7 +16,8 @@
  * @module dsh-city-water/lib/index
  */
 
-import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join, normalize, resolve } from 'node:path';
@@ -28,7 +29,7 @@ export const inject = ['webServer', 'systemPrompt', 'tools'];
 
 const BASE = '/api/dsh-city-water';
 const WORKBENCH_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'workbench');
-const STATIC_FILES = new Set(['index.html', 'water.css', 'water.js']);
+const STATIC_FILES = new Set(['index.html', 'water.css', 'water.js', 'manifest.json', 'sw.js', 'icon-180.png', 'icon-192.png', 'icon-512.png']);
 
 const MODULE_NAMES = new Set(['水情监测', '供需调度', '风险预警', '河湖管理', '报告中心', '知识库']);
 const SYSTEM_NAMES = new Set(['sources', 'models', 'plugins', 'logs']);
@@ -79,18 +80,79 @@ function trustedHostsFromCmdline(cmdline) {
  * 且非 cross-site、Origin 与 Host 同源（存在时）才放行。作为 /api 信任栅栏之后的一道护栏。
  */
 function isLoopbackRequest(req, trusted = []) {
+  if (!isHostAllowed(req, trusted)) return false;
+  if (req.headers['sec-fetch-site'] === 'cross-site') return false;
+  const origin = req.headers.origin;
+  if (origin === undefined) return true;
+  try { return new URL(origin).host === new URL(`http://${req.headers.host}`).host; } catch { return false; }
+}
+
+/**
+ * 仅校验 Host 是否可信（回环或声明可信主机），不做 sec-fetch-site / Origin 同源约束。
+ * 用于公开入口（如 /go 加密短链，扫码/跨站点击属于预期行为），真正的鉴权由 HMAC 令牌承担。
+ */
+function isHostAllowed(req, trusted = []) {
   const host = req.headers.host;
   if (typeof host !== 'string') return false;
   let hostUrl;
   try { hostUrl = new URL(`http://${host}`); } catch { return false; }
   const hostname = hostUrl.hostname;
-  const loopback = LOOPBACK_HOSTNAMES.has(hostname);
-  const trustedMatch = !loopback && trusted.some((entry) => trustedHostname(entry) === hostname);
-  if (!loopback && !trustedMatch) return false;
-  if (req.headers['sec-fetch-site'] === 'cross-site') return false;
-  const origin = req.headers.origin;
-  if (origin === undefined) return true;
-  try { return new URL(origin).host === hostUrl.host; } catch { return false; }
+  return LOOPBACK_HOSTNAMES.has(hostname) || trusted.some((entry) => trustedHostname(entry) === hostname);
+}
+
+/** 加密短链访问密钥文件（默认插件目录下 .auth-secrets，已 gitignore；可用环境变量覆盖）。 */
+const DEFAULT_AUTH_FILE = join(dirname(fileURLToPath(import.meta.url)), '..', '.auth-secrets');
+
+/** 生成加密短链令牌：`t.<expiresAtMs>.<nonce>.<hmac-hex>`，HMAC 密钥为 LINK_SECRET。 */
+function signLinkToken(secret, expiresAtMs, nonce) {
+  const payload = `t.${expiresAtMs}.${nonce}`;
+  return `${payload}.${createHmac('sha256', secret).update(payload).digest('hex')}`;
+}
+
+/** 校验加密短链令牌（格式 + 未过期 + HMAC 签名，timing-safe 比较）。 */
+function verifyLinkToken(secret, token, nowMs) {
+  if (typeof token !== 'string') return false;
+  const parts = token.split('.');
+  if (parts.length !== 4 || parts[0] !== 't') return false;
+  const exp = Number(parts[1]);
+  if (!Number.isFinite(exp) || exp <= nowMs) return false;
+  if (!/^[0-9a-f]{8,64}$/i.test(parts[2])) return false;
+  if (!/^[0-9a-f]{64}$/i.test(parts[3])) return false;
+  const expect = createHmac('sha256', secret).update(`t.${exp}.${parts[2]}`).digest('hex');
+  const a = Buffer.from(expect);
+  const b = Buffer.from(parts[3]);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+/**
+ * 读取访问密钥（LINK_SECRET 用于签发短链；ACCESS_TOKEN 作为免密 cookie 值，
+ * 需与 Caddyfile 中 @has_cookie 匹配器保持一致）。读取顺序：环境变量 → 密钥文件 → 自动生成落盘。
+ */
+function loadAuthSecrets(log) {
+  const file = process.env.DSH_CITY_WATER_AUTH_FILE || DEFAULT_AUTH_FILE;
+  let linkSecret = process.env.DSH_CITY_WATER_LINK_SECRET;
+  let accessToken = process.env.DSH_CITY_WATER_ACCESS_TOKEN;
+  if (!(linkSecret && accessToken)) {
+    try {
+      if (existsSync(file)) {
+        for (const line of readFileSync(file, 'utf8').split(/\r?\n/)) {
+          const m = line.match(/^\s*([A-Z_]+)\s*=\s*([0-9a-fA-F]+)\s*$/);
+          if (!m) continue;
+          if (m[1] === 'LINK_SECRET' && !linkSecret) linkSecret = m[2];
+          else if (m[1] === 'ACCESS_TOKEN' && !accessToken) accessToken = m[2];
+        }
+      }
+    } catch { /* ignore */ }
+  }
+  if (!linkSecret) linkSecret = randomBytes(32).toString('hex');
+  if (!accessToken) accessToken = randomBytes(32).toString('hex');
+  if (!existsSync(file)) {
+    try {
+      writeFileSync(file, `LINK_SECRET=${linkSecret}\nACCESS_TOKEN=${accessToken}\n`, { mode: 0o600 });
+      log(`访问密钥已生成：${file}（ACCESS_TOKEN 需与 Caddyfile 的 @has_cookie 匹配器一致）`);
+    } catch { /* ignore */ }
+  }
+  return { linkSecret, accessToken };
 }
 
 function writeJson(res, code, obj) {
@@ -157,6 +219,10 @@ export function apply(ctx, config = {}) {
     ...webRuntimeTrusted,
   ];
 
+  // 加密短链访问密钥 + 免密 cookie 有效期（默认 30 天，可用环境变量覆盖）
+  const secrets = loadAuthSecrets(log);
+  const cookieMaxAge = Math.max(1, Number(process.env.DSH_CITY_WATER_COOKIE_TTL_DAYS || 30)) * 86400;
+
   ctx.effect(async () => {
     const disposers = [];
     const announce = config.announceToAgent !== false;
@@ -216,12 +282,35 @@ export function apply(ctx, config = {}) {
               body.toString('utf8').replace('<!--CW_DATA-->', `<script>window.__CW_DATA__ = ${snapshot}</script>`),
             );
           }
-          const types = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8' };
+          const types = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.json': 'application/manifest+json; charset=utf-8', '.png': 'image/png' };
           res.writeHead(200, { 'content-type': types[file.slice(file.lastIndexOf('.'))] ?? 'application/octet-stream', 'cache-control': 'no-cache' });
           res.end(req.method === 'HEAD' ? undefined : body);
         } catch {
           writeText(res, 404, 'not found');
         }
+      },
+    }));
+
+    // ---- 加密短链免密授权：GET /api/dsh-city-water/go/<token> → 校验后种 cookie 并跳转工作台 ----
+    disposers.push(ctx.webServer.register({
+      kind: 'prefix',
+      path: `${BASE}/go`,
+      handler: (req, res) => {
+        if (!isHostAllowed(req, trustedHosts)) return writeText(res, 403, 'loopback only');
+        if (req.method !== 'GET' && req.method !== 'HEAD') return writeText(res, 405, 'method not allowed');
+        const url = new URL(req.url ?? '/', 'http://x');
+        const token = decodeURIComponent(url.pathname.slice(`${BASE}/go`.length).replace(/^\/+/, ''));
+        if (!verifyLinkToken(secrets.linkSecret, token, Date.now())) {
+          res.writeHead(403, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' });
+          res.end('<!doctype html><html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>链接无效</title></head><body style="font-family:system-ui,-apple-system,\'PingFang SC\',\'Microsoft YaHei\',sans-serif;background:#08293f;color:#fff;display:grid;place-items:center;min-height:100vh;margin:0"><div style="text-align:center;padding:2rem"><h1>访问链接无效或已过期</h1><p style="color:#cfe6f5">请向作者索取新的二维码 / 访问链接。</p></div></body></html>');
+          return;
+        }
+        res.writeHead(302, {
+          Location: `${BASE}/workbench/index.html`,
+          'Set-Cookie': `cw_access=${secrets.accessToken}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${cookieMaxAge}`,
+          'cache-control': 'no-cache',
+        });
+        res.end();
       },
     }));
 

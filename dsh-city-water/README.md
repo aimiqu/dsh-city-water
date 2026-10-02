@@ -50,6 +50,27 @@ dsh web
 - v1 工具与 API 只读；生产控制（SCADA / 泵站 / 闸门）只生成方案、必须人工审批。
 - 全部数据标注 `source=demo`，界面显示「演示态势数据」徽标；密钥只存在于宿主进程。
 
+## PWA（全屏安装）
+
+工作台支持 PWA 全屏安装（`workbench/manifest.json` + `workbench/sw.js` + 水波图标）：
+
+- 顶层访问时（`/api/dsh-city-water/workbench/index.html`）注册 Service Worker；DSH GUI 内 iframe 嵌入时自动跳过。
+- `display: fullscreen`（Android/Chrome 全屏；iOS 走 `apple-mobile-web-app-capable` 独立模式）。
+- 图标：`workbench/icon-192.png` / `icon-512.png` / `icon-180.png`（纯 Node 生成，无第三方依赖）。
+
+## 加密短链 · 扫码免密访问
+
+访客无需输入口令，扫描简历二维码（加密短链）即可免密进入工作台：
+
+- 授权入口：`GET /api/dsh-city-water/go/<token>` —— 校验 HMAC 签名 + 有效期，成功后种下 `cw_access` 免密 cookie 并跳转工作台；由 Caddy 侧 `@protected` 匹配器检测该 cookie 跳过 `basic_auth`。
+- 密钥：`.auth-secrets`（`LINK_SECRET` 用于签发短链，`ACCESS_TOKEN` 作为免密 cookie 值，已 gitignore）。
+- 生成链接：
+
+```bash
+node scripts/gen-access-link.mjs --days 30 --base https://water.yuxinqu.com
+# 用 https://cli.im 等将输出链接生成二维码，即「扫码即授权」
+```
+
 ## 扩展点
 
 - 真实数据源：替换 `lib/water-data.js`（或新增只读数据工具），API 契约不变。

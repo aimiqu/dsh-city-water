@@ -4,6 +4,15 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>城市水智管 · 水资源管理 Agent</title>
+  <meta name="description" content="城市水资源综合态势研判、风险预警与水务报告起草">
+  <meta name="theme-color" content="#0b4d78">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="水智管">
+  <link rel="manifest" href="/api/dsh-city-water/workbench/manifest.json">
+  <link rel="icon" type="image/png" sizes="192x192" href="/api/dsh-city-water/workbench/icon-192.png">
+  <link rel="apple-touch-icon" href="/api/dsh-city-water/workbench/icon-180.png">
   <link rel="stylesheet" href="/api/dsh-city-water/workbench/water.css">
   <!--CW_DATA-->
 </head>
@@ -44,5 +53,14 @@
     </section>
   </main>
   <script src="/api/dsh-city-water/workbench/water.js"></script>
+  <script>
+    // 仅顶层页面注册 Service Worker（DSH GUI 内以 iframe 嵌入时跳过，避免污染宿主 origin）
+    if ('serviceWorker' in navigator && window.self === window.top) {
+      window.addEventListener('load', function () {
+        navigator.serviceWorker.register('/api/dsh-city-water/workbench/sw.js', { scope: '/api/dsh-city-water/workbench/' })
+          .catch(function () { /* 静默降级，不影响主流程 */ });
+      });
+    }
+  </script>
 </body>
 </html>

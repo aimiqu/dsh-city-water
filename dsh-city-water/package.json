@@ -13,6 +13,7 @@
     "lib",
     "skills",
     "workbench",
+    "scripts",
     "cordis.patch.yml",
     "README.md"
   ],
