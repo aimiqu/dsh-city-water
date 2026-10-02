@@ -62,11 +62,18 @@ dsh web
 
 访客无需输入口令，扫描简历二维码（加密短链）即可免密进入工作台：
 
-- 授权入口：`GET /api/dsh-city-water/go/<token>` —— 校验 HMAC 签名 + 有效期，成功后种下 `cw_access` 免密 cookie 并跳转工作台；由 Caddy 侧 `@protected` 匹配器检测该 cookie 跳过 `basic_auth`。
-- 密钥：`.auth-secrets`（`LINK_SECRET` 用于签发短链，`ACCESS_TOKEN` 作为免密 cookie 值，已 gitignore）。
+- 授权入口：`GET /api/dsh-city-water/go/<token>` —— 校验令牌后种下 `cw_access` 免密 cookie 并跳转工作台；由 Caddy 侧 `@protected` 匹配器检测该 cookie 跳过 `basic_auth`。
+- 令牌两类：
+  - **永久令牌**（默认，长期有效）：随机 32 位 hex，存入 `.auth-secrets` 的 `LINK_TOKEN=` 行（可多行），删行即吊销，插件每次请求实时重读（无需重启）。
+  - **限时令牌**（可选 `--days`）：HMAC 签名 + 有效期，过期自动失效。
+- 密钥：`.auth-secrets`（`LINK_SECRET` / `ACCESS_TOKEN` / `LINK_TOKEN`，已 gitignore）。
 - 生成链接：
 
 ```bash
+# 永久链接（默认，推荐，长期有效）
+node scripts/gen-access-link.mjs --base https://water.yuxinqu.com
+
+# 限时链接（可选）
 node scripts/gen-access-link.mjs --days 30 --base https://water.yuxinqu.com
 # 用 https://cli.im 等将输出链接生成二维码，即「扫码即授权」
 ```

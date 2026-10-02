@@ -125,34 +125,46 @@ function verifyLinkToken(secret, token, nowMs) {
 }
 
 /**
- * 读取访问密钥（LINK_SECRET 用于签发短链；ACCESS_TOKEN 作为免密 cookie 值，
- * 需与 Caddyfile 中 @has_cookie 匹配器保持一致）。读取顺序：环境变量 → 密钥文件 → 自动生成落盘。
+ * 读取访问密钥：LINK_SECRET 用于签发限时短链；ACCESS_TOKEN 作为免密 cookie 值（需与
+ * Caddyfile 中 @has_cookie 匹配器一致）；LINK_TOKEN 为长期有效的永久短链令牌（32 位 hex，
+ * 可多行，删除对应行即吊销）。读取顺序：环境变量 → 密钥文件。
  */
+function readAuthFile() {
+  const file = process.env.DSH_CITY_WATER_AUTH_FILE || DEFAULT_AUTH_FILE;
+  const out = {
+    linkSecret: process.env.DSH_CITY_WATER_LINK_SECRET || '',
+    accessToken: process.env.DSH_CITY_WATER_ACCESS_TOKEN || '',
+    linkTokens: new Set(),
+  };
+  const envTokens = process.env.DSH_CITY_WATER_LINK_TOKENS || '';
+  for (const t of envTokens.split(',')) if (t.trim()) out.linkTokens.add(t.trim());
+  try {
+    if (existsSync(file)) {
+      for (const line of readFileSync(file, 'utf8').split(/\r?\n/)) {
+        const m = line.match(/^\s*([A-Z_]+)\s*=\s*([0-9a-fA-F]+)\s*$/);
+        if (!m) continue;
+        if (m[1] === 'LINK_SECRET' && !out.linkSecret) out.linkSecret = m[2];
+        else if (m[1] === 'ACCESS_TOKEN' && !out.accessToken) out.accessToken = m[2];
+        else if (m[1] === 'LINK_TOKEN') out.linkTokens.add(m[2]);
+      }
+    }
+  } catch { /* ignore */ }
+  return out;
+}
+
+/** 启动时读取/补齐访问密钥（缺失则自动生成并落盘）。 */
 function loadAuthSecrets(log) {
   const file = process.env.DSH_CITY_WATER_AUTH_FILE || DEFAULT_AUTH_FILE;
-  let linkSecret = process.env.DSH_CITY_WATER_LINK_SECRET;
-  let accessToken = process.env.DSH_CITY_WATER_ACCESS_TOKEN;
-  if (!(linkSecret && accessToken)) {
-    try {
-      if (existsSync(file)) {
-        for (const line of readFileSync(file, 'utf8').split(/\r?\n/)) {
-          const m = line.match(/^\s*([A-Z_]+)\s*=\s*([0-9a-fA-F]+)\s*$/);
-          if (!m) continue;
-          if (m[1] === 'LINK_SECRET' && !linkSecret) linkSecret = m[2];
-          else if (m[1] === 'ACCESS_TOKEN' && !accessToken) accessToken = m[2];
-        }
-      }
-    } catch { /* ignore */ }
-  }
-  if (!linkSecret) linkSecret = randomBytes(32).toString('hex');
-  if (!accessToken) accessToken = randomBytes(32).toString('hex');
+  const secrets = readAuthFile();
+  if (!secrets.linkSecret) secrets.linkSecret = randomBytes(32).toString('hex');
+  if (!secrets.accessToken) secrets.accessToken = randomBytes(32).toString('hex');
   if (!existsSync(file)) {
     try {
-      writeFileSync(file, `LINK_SECRET=${linkSecret}\nACCESS_TOKEN=${accessToken}\n`, { mode: 0o600 });
+      writeFileSync(file, `LINK_SECRET=${secrets.linkSecret}\nACCESS_TOKEN=${secrets.accessToken}\n`, { mode: 0o600 });
       log(`访问密钥已生成：${file}（ACCESS_TOKEN 需与 Caddyfile 的 @has_cookie 匹配器一致）`);
     } catch { /* ignore */ }
   }
-  return { linkSecret, accessToken };
+  return secrets;
 }
 
 function writeJson(res, code, obj) {
@@ -219,8 +231,8 @@ export function apply(ctx, config = {}) {
     ...webRuntimeTrusted,
   ];
 
-  // 加密短链访问密钥 + 免密 cookie 有效期（默认 30 天，可用环境变量覆盖）
-  const secrets = loadAuthSecrets(log);
+  // 启动时确保访问密钥存在（缺失则自动生成落盘）；/go 请求时再按需读最新令牌
+  loadAuthSecrets(log);
   const cookieMaxAge = Math.max(1, Number(process.env.DSH_CITY_WATER_COOKIE_TTL_DAYS || 30)) * 86400;
 
   ctx.effect(async () => {
@@ -300,14 +312,17 @@ export function apply(ctx, config = {}) {
         if (req.method !== 'GET' && req.method !== 'HEAD') return writeText(res, 405, 'method not allowed');
         const url = new URL(req.url ?? '/', 'http://x');
         const token = decodeURIComponent(url.pathname.slice(`${BASE}/go`.length).replace(/^\/+/, ''));
-        if (!verifyLinkToken(secrets.linkSecret, token, Date.now())) {
+        const auth = readAuthFile(); // 每次读最新：新追加的永久 LINK_TOKEN 无需重启即生效
+        const okPermanent = auth.linkTokens.has(token);
+        const okTimed = verifyLinkToken(auth.linkSecret, token, Date.now());
+        if (!okPermanent && !okTimed) {
           res.writeHead(403, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' });
           res.end('<!doctype html><html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>链接无效</title></head><body style="font-family:system-ui,-apple-system,\'PingFang SC\',\'Microsoft YaHei\',sans-serif;background:#08293f;color:#fff;display:grid;place-items:center;min-height:100vh;margin:0"><div style="text-align:center;padding:2rem"><h1>访问链接无效或已过期</h1><p style="color:#cfe6f5">请向作者索取新的二维码 / 访问链接。</p></div></body></html>');
           return;
         }
         res.writeHead(302, {
           Location: `${BASE}/workbench/index.html`,
-          'Set-Cookie': `cw_access=${secrets.accessToken}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${cookieMaxAge}`,
+          'Set-Cookie': `cw_access=${auth.accessToken}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${cookieMaxAge}`,
           'cache-control': 'no-cache',
         });
         res.end();
